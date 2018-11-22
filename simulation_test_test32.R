@@ -20,8 +20,7 @@ mlag <- function(X, lag)
       Xlag[(ii+1):Traw, (N * (ii - 1) + 1):(N * ii)] = X[1:(Traw-ii), (1:N)]
     }
     return(Xlag)
-  }
-asdf <- 123
+  } s
 n <-210
 k_sim <- 3
 Z <- (1:n)/10 + rnorm(n,0.1,0.05)
