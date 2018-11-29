@@ -1,6 +1,5 @@
 
 setwd("~/Documents/Master Arbeit/R und DATA")
-set.seed(123)
 #simulated model
 ####MASTERARBEIT CODE
 require(extraDistr)
@@ -25,8 +24,8 @@ mlag <- function(X, lag)
 
 n <-2010
 k_sim <- 3
-Z <- rnorm(n,0,2)
-fe01 <- c(rep(1,n)) + exp(-60*(Z-3)/1)
+Z <- rnorm(n,0,5)
+fe01 <- c(rep(1,n)) + exp(-60*(Z-5)/sd(Z))
 fe1 <- fe01^-1
 parameters1 <- c(0.5, -0.9, 0.35, 0.6)
 parameters2 <- c(0.05, 0.44, -0.8, 0.1)
@@ -64,12 +63,11 @@ m_adj_smoothed <- cbind(Z,mlag(Z,10))
 alpha_sigma_hyper <- 0.001
 beta_sigma_hyper <- 0.001
 #### gamma 
-alpha_gamma <-
-beta_gamma <-
+alpha_gamma_hyper <- 80^2/4000
+beta_gamma_hyper <- 80/4000
 #### c
-mu_c <-
-var_c <- 
-
+mu_hyper_c <- 0 
+var_hyper_c <- 1^2
 # hyperparameters for AR parameters
 alpha_delta_hyper <- 2 
 beta_delta_hyper <- 50
@@ -80,18 +78,17 @@ tau_k <- 0.5
 
 SIGMA <- diag(rep(10^10,2*(k+1)))
 
-
   
 nsave <- 1500
 nburn <- 1500
 ntot <- nsave+nburn
 
 ##Initial values
-gamma_draw <- 200
-theta <- 1
+gamma_draw <- 100
+theta <- sd(Z)
 c_draw <- 10
-delta_draw <- 50
-sigma_draw <- 0.5
+delta_draw <- 1
+sigma_draw <- 1
 LAMBDA_draw <- 25
 ###PARAMETER STORE
 delta_store <- rep(NA,ntot)
@@ -101,9 +98,9 @@ sigma_store <- rep(NA, ntot)
 k_store <- rep(NA, ntot)
 LAMBDA_store <- rep(NA, ntot)
 # MTM proposal parameters
-gamma_var <- 80
+gamma_var <- 120
 
-c_var <- 0.2
+c_var <- 0.5
 
 ####LOOP
 countMTM <- 0
@@ -115,7 +112,6 @@ for(i in 1:ntot){
   for (j in 1:1000){
     
     k_candidate <- rdlaplace(1,k,0.5)   
-    print(k_candidate)
     if (0<k_candidate&k_candidate<=10){
       break
     }
@@ -127,6 +123,7 @@ for(i in 1:ntot){
   s <- max(d,k,k_candidate)
   n <- T-s
   Z <- m_adj_smoothed[(1+s):T,(d+1)]
+  theta <- sd(Z)
   y <- Y[(1+s):T]
   x1 <- cbind(1,X[(1+s):T,1:k])
   fe01 <- c(rep(1,n)) + exp(-gamma_draw*(Z-c_draw)/theta)
@@ -135,7 +132,7 @@ for(i in 1:ntot){
   x2 <- diag(fe1)%*%x1
   x <- cbind(x1,x2)
   
-  bigC <- solve(crossprod(x)+ solve(delta_draw*SIGMA))
+  bigC <- solve(crossprod(x) + solve(delta_draw*SIGMA))
   beta_hat <- bigC%*%t(x)%*%y
   
   #candidate state
@@ -143,7 +140,6 @@ for(i in 1:ntot){
   x1c <- cbind(1,X[(1+s):T,1:k_candidate])
   x2c <- diag(fe1)%*%x1c
   xc <- cbind(x1c,x2c)
-  
   SIGMA_candidate <- diag(rep(10^10,2*(k_candidate+1)))
   bigC_candidate <- solve(crossprod(xc) + solve(delta_draw*SIGMA_candidate))
   beta_hat_candidate <- bigC_candidate%*%t(xc)%*%y
@@ -152,13 +148,8 @@ for(i in 1:ntot){
   aaa_current <- -(1/2)*log(det(SIGMA))+(1/2)*log(det(sigma_draw*bigC))-(1/2)*((crossprod(y)/sigma_draw-t(beta_hat)%*%solve(sigma_draw*bigC)%*%beta_hat))
   bbb <- tau_k*(((k_candidate-k)*LAMBDA_draw+log(factorial(k)))-log(factorial(k_candidate)))
                                                                               
-  
-  #Step 3:
-  alpha_RJ <- min(aaa_candidate-aaa_current+bbb,0)
-  
-  
-  #Step 4:
-  if (alpha_RJ > log(runif(1,0,1))){
+  #Step 3&4:
+  if (aaa_candidate-aaa_current+bbb > log(runif(1,0,1))){
     countRJ <- countRJ+1
     k <- k_candidate
     n <- n
@@ -178,7 +169,7 @@ for(i in 1:ntot){
   #Step 5: 
   # draw beta
   
-  beta_draw <- mvrnorm(1000,beta_hat, sigma_draw*bigC) 
+  beta_draw <- beta_hat+t(chol(bigC))%*%rnorm(2*(k+1))#mvrnorm(1,beta_hat, sigma_draw*bigC) 
   
   
   #### (b) SIMULATE ERROR VARIANCE (AND DELAY PARAMATER d)
@@ -205,41 +196,36 @@ for(i in 1:ntot){
   
   sigma_store[i] <- sigma_draw
   #### (c) SIMULATE THE SMOOTHING AND LOCATION PARAMATERS c AND gamma
-  
-  #Multiple Try Metropols Algorithm to draw gamma and c
-  #Step1:
-  #draw ktm proposals for gamma and c
   ktm <- 4
-  #gamma_c_proposal <- mvrnorm(4, c(gamma_draw, c_draw), diag(rep(1,2)))
   gamma_proposal <- rgamma(ktm, (gamma_draw^2)/gamma_var, gamma_draw/gamma_var)
   c_proposal <- rnorm(ktm, c_draw, c_var)
   
   #construct candidate transition functions and x
   # calculate Fz
-  posterior_gamma_c <- rep(NA,ktm)
-  
+  w <- rep(NA,ktm)
   for (iii in 1:ktm){
-    fe01c <- c(rep(1,n)) + exp(-gamma_proposal[iii]*(Z-c_proposal[iii])/theta)
-    fe1c <- fe01c^-1
+    fe01p <- c(rep(1,n)) + exp(-gamma_proposal[iii]*(Z-c_proposal[iii])/theta)
+    fe1p <- fe01p^-1
     #construct x  
-    x2c <- diag(fe1c)%*%x1
-    xc <- cbind(x1,x2c)
+    x2p <- diag(fe1p)%*%x1
+    xp <- cbind(x1,x2p)
     
-    posterior_gamma_c[iii] <- exp(-((1/(2*sigma_draw))*t(y-xc%*%beta_draw)%*%(y-xc%*%beta_draw)))
-  }
+    aaa <- (alpha_gamma_hyper-1)*log(gamma_proposal[iii])-(1/(2*sigma_draw))*(t(y-xp%*%beta_draw)%*%(y-xp%*%beta_draw))-beta_gamma_hyper*gamma_proposal[iii]-
+      (c_proposal[iii]-mu_c)^2/(2*var_hyper_c)
+    
+    bbb <- ((gamma_proposal[iii]^2/gamma_var)*(log(gamma_proposal[iii])-log(gamma_var)) - lgamma(gamma_proposal[iii]^2/gamma_var))+(gamma_proposal[iii]^2/gamma_var-1)*log(gamma_draw)-
+      (gamma_proposal[iii]/gamma_var)*gamma_draw-(1/(2*c_var))*(c_draw-c_proposal[iii])^2
+    
+    
+    w[iii] <- aaa+bbb
+  }                           
+  
+  #print(dgamma(gamma_proposal, (gamma_draw^2)/gamma_var, gamma_draw/gamma_var))
   #print(posterior_gamma_c)
   #posterior density gamma and c (flat prior) <- calculate weight function
- 
+  lw <- logadd(w)
+  w_prob <- exp(w-lw)
   
-  w <-  posterior_gamma_c*dgamma(gamma_draw, (gamma_proposal^2)/gamma_var, gamma_proposal/gamma_var)*dnorm(c_draw, c_proposal, c_var)
-  
-  w_prob <- w/sum(w)
-  
-  lambda_function <- rep(NA,ktm) 
-  for (jj in 1:ktm){
-    if(gamma_proposal[jj]>0 & c_proposal[jj] > 0){lambda_function[jj] <- 1} 
-    else{lambda_function[jj] <- -1}
-  }
   #weights <- rep(NA,ktm)
   
   #for (jj in 1:ktm) {
@@ -255,37 +241,46 @@ for(i in 1:ntot){
   #Step3:
   gamma_trial <- rgamma(ktm-1, (gamma_candidate^2)/gamma_var, gamma_candidate/gamma_var)
   c_trial <- rnorm(ktm-1, c_candidate, c_var)
-  
-  gamma_c_trial_set <- rbind(cbind(gamma_trial, c_trial),c(gamma_draw,c_draw))
-  
+  gamma_trial <- c(gamma_trial,gamma_draw)
+  c_trial <- c(c_trial,c_draw)
   #weights_trial <- posterior_gamma_c*gamma_c_trial_set[,1]*c_proposal*gamma_c_trial_set[,2]*lambda_function
   
-  posterior_gamma_c_trial <- rep(NA, ktm)
+  w_trial <- rep(NA, ktm)
   for (jjj in 1:ktm){
-    fe01c <- c(rep(1,n)) + exp(-gamma_c_trial_set[jjj,1]*(Z-gamma_c_trial_set[jjj,2])/theta)
+    fe01c <- c(rep(1,n)) + exp(-gamma_trial[jjj]*(Z-c_trial[jjj])/theta)
     fe1c <- fe01c^-1
     #construct x  
     x2c <- diag(fe1c)%*%x1
     xc <- cbind(x1,x2c)
     
-    posterior_gamma_c_trial[jjj] <- exp(-((1/2*sigma_draw)*t(y-xc%*%beta_draw)%*%solve(diag(rep(1,n)))%*%(y-xc%*%beta_draw)))
+    aaa_trial<- (alpha_gamma_hyper-1)*log(gamma_trial[jjj])-(1/(2*sigma_draw))*(t(y-xc%*%beta_draw)%*%(y-xc%*%beta_draw))-beta_gamma_hyper*gamma_trial[jjj]-
+      (c_trial[jjj]-mu_c)^2/(2*var_hyper_c)
+    
+    bbb_trial <- ((gamma_trial[jjj]^2/gamma_var)*(log(gamma_trial[jjj])-log(gamma_var)) - lgamma(gamma_trial[jjj]^2/gamma_var))+(gamma_trial[jjj]^2/gamma_var-1)*log(gamma_candidate)-
+      (gamma_trial[jjj]/gamma_var)*gamma_candidate-(1/(2*c_var))*(c_candidate-c_trial[jjj])^2
+    
+    
+    
+    w_trial[jjj]  <- aaa_trial+bbb_trial
   }
   
-  w_trial <- posterior_gamma_c_trial*dgamma(gamma_candidate, (gamma_c_trial_set[,1]^2)/gamma_var, gamma_c_trial_set[,1]/gamma_var)*dnorm(c_candidate, gamma_c_trial_set[,2], c_var)
+  lw_trial <- logadd(w_trial)
   #Step4:
   
-  alpha_MTM <- min(sum(w)/sum(w_trial),1)
   
-  if (alpha_MTM > runif(1,0,1)){
+  if (lw-lw_trial > log(runif(1))){
     countMTM <- countMTM+1
     gamma_draw <- gamma_candidate
     c_draw <- c_candidate
+    
   } else {
     
   }
   
   gamma_store[i] <- gamma_draw
   c_store[i] <- c_draw
+  print(countMTM/i)
+  
   #### 
   #type 2
   #gamma_prior <- rgamma(1,80^2/4000,80/4000) 
